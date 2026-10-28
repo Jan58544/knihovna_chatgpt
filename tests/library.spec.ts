@@ -7,7 +7,8 @@ const ISBN = '9788025703670';
 const title = catalogueResponse.records[0].title;
 
 async function enterIsbn(page: Page, isbn = ISBN) {
-  await page.getByRole('button', { name: 'Zadat ISBN ručně', exact: true }).click();
+  await page.getByRole('button', { name: 'Přidat knihu', exact: true }).click();
+  await page.getByRole('button', { name: /Zadat ISBN ručně/ }).click();
   await page.getByRole('textbox', { name: 'ISBN knihy' }).fill(isbn);
   await page.getByRole('button', { name: 'Najít a přidat knihu' }).click();
 }
@@ -15,13 +16,14 @@ async function enterIsbn(page: Page, isbn = ISBN) {
 async function chooseFilter(page: Page, name: string) {
   const desktop = page.getByRole('navigation', { name: 'Knihovna' });
   if (await desktop.isVisible()) await desktop.getByRole('button', { name: new RegExp(name) }).click();
-  else await page.locator('.mobile-filters').getByRole('button', { name, exact: true }).click();
+  else await page.locator('.mobile-dock').getByRole('button', { name, exact: true }).click();
 }
 
 test.beforeEach(async ({ page }) => {
   // Block the whole catalogue origin first; individual tests supply local fixtures.
   // Never let a missed mock result in a live request from the cloud environment.
   await page.route('https://www.knihovny.cz/**', route => route.abort());
+  await page.route('https://covers.openlibrary.org/**', route => route.fulfill({ status: 404, body: '' }));
   await page.route('https://fonts.googleapis.com/**', route => route.abort());
   await page.route('https://fonts.gstatic.com/**', route => route.abort());
 });
@@ -144,8 +146,9 @@ test('denied camera permission offers manual entry and Escape closes the dialog'
   });
   await page.route(API, route => route.fulfill({ json: catalogueResponse }));
   await page.goto('/');
-  const scan = page.getByRole('button', { name: 'Scan', exact: true });
+  const scan = page.getByRole('button', { name: 'Přidat knihu', exact: true });
   await scan.click();
+  await page.getByRole('button', { name: /Naskenovat ISBN/ }).click();
   await expect(page.getByRole('dialog', { name: 'Přidat knihu' })).toBeVisible();
   await expect(page.locator('.camera-error')).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: 'Zadat ručně', exact: true }).click();
@@ -159,7 +162,8 @@ test('layout fits the viewport and an accessible dialog contains keyboard focus'
   await page.goto('/');
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
-  await page.getByRole('button', { name: 'Zadat ISBN ručně', exact: true }).click();
+  await page.getByRole('button', { name: 'Přidat knihu', exact: true }).click();
+  await page.getByRole('button', { name: /Zadat ISBN ručně/ }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toHaveAttribute('aria-modal', 'true');
   for (let i = 0; i < 10; i++) {
@@ -210,11 +214,82 @@ test('Scan decodes an EAN-13 camera frame, adds the book and releases camera tra
   });
   await page.route(API, route => route.fulfill({ json: catalogueResponse }));
   await page.goto('/');
-  await page.getByRole('button', { name: 'Scan', exact: true }).click();
+  await page.getByRole('button', { name: 'Přidat knihu', exact: true }).click();
+  await page.getByRole('button', { name: /Naskenovat ISBN/ }).click();
   await expect(page.locator('.book-card h3')).toHaveText(title, { timeout: 15_000 });
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await page.evaluate(() => {
     const streams = (window as unknown as { __folioTestStreams: MediaStream[] }).__folioTestStreams;
     return streams.length > 0 && streams.every(stream => stream.getTracks().every(track => track.readyState === 'ended'));
   })).toBe(true);
+});
+
+test('one add entry, preserved copy, and no horizontal dragging at small widths', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Přidat knihu', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Scan', exact: true })).toHaveCount(0);
+  await expect(page.locator('.steps')).toHaveCount(0);
+  await expect(page.getByText('Vytvořeno z lásky ke knihám.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Všechny vaše příběhy. Konečně na jednom místě.')).toBeVisible();
+  for (const width of [320, 375, 430, 768, 1280]) {
+    await page.setViewportSize({ width, height: 850 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.evaluate(() => window.scrollBy(100, 0));
+    expect(await page.evaluate(() => scrollX)).toBe(0);
+  }
+});
+
+test('real ISBN cover displays; missing cover can be replaced locally and survives reload', async ({ page }) => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450"><rect width="300" height="450" fill="#b6c7a2"/><text x="20" y="80" font-size="24">Test cover</text></svg>';
+  await page.route('https://covers.openlibrary.org/**', route => route.fulfill({ contentType: 'image/svg+xml', body: svg }));
+  await page.route(API, route => route.fulfill({ json: catalogueResponse }));
+  await page.goto('/'); await enterIsbn(page);
+  const image = page.locator('.book-card .cover-image');
+  await expect(image).toBeVisible();
+  await expect(image).toHaveAttribute('src', `https://covers.openlibrary.org/b/isbn/${ISBN}-L.jpg?default=false`);
+  await expect.poll(() => image.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 1)).toBe(true);
+  await page.locator('.book-card').click();
+  const detail = page.getByRole('dialog', { name: 'Detail knihy' });
+  await expect(detail.getByText('Pořadí v prodejnosti', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Údaj není dostupný', { exact: true })).toHaveCount(2);
+  const png = await page.evaluate(async () => {
+    const canvas = document.createElement('canvas'); canvas.width = 20; canvas.height = 30;
+    const ctx = canvas.getContext('2d')!; ctx.fillStyle = '#aaa'; ctx.fillRect(0, 0, 20, 30);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  await page.getByLabel('Nahrát vlastní obálku').setInputFiles({ name: 'obalka.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+  await expect(detail.locator('.cover-image')).toHaveAttribute('src', /^data:image\/jpeg;base64,/);
+  await page.reload();
+  await expect(page.locator('.book-card .cover-image')).toHaveAttribute('src', /^data:image\/jpeg;base64,/);
+  await page.route('https://covers.openlibrary.org/**', route => route.fulfill({ status: 404, body: '' }));
+  await page.evaluate(() => {
+    const books = JSON.parse(localStorage.getItem('folio.books.v1')!); delete books[0].coverData;
+    localStorage.setItem('folio.books.v1', JSON.stringify(books));
+  });
+  await page.reload(); await expect(page.locator('.cover-missing')).toBeVisible();
+});
+
+test('native barcode decoder is used without downloading ZXing and releases camera on close', async ({ page }) => {
+  await page.addInitScript(() => {
+    const streams: MediaStream[] = [];
+    Object.defineProperty(window, '__nativeStreams', { value: streams });
+    Object.defineProperty(window, '__nativeCalls', { value: { count: 0 } });
+    Object.defineProperty(window, 'BarcodeDetector', { value: class {
+      static async getSupportedFormats() { return ['ean_13']; }
+      async detect() { (window as unknown as { __nativeCalls: {count:number} }).__nativeCalls.count++; return []; }
+    }, configurable: true });
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { configurable: true, value: async () => {
+      const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 480;
+      const ctx = canvas.getContext('2d')!; ctx.fillRect(0, 0, 640, 480);
+      const stream = canvas.captureStream(10); streams.push(stream); return stream;
+    } });
+  });
+  const decoderRequests: string[] = [];
+  page.on('request', request => { if (request.url().includes('zxing')) decoderRequests.push(request.url()); });
+  await page.goto('/'); await page.getByRole('button', { name: 'Přidat knihu', exact: true }).click();
+  await page.getByRole('button', { name: /Naskenovat ISBN/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __nativeCalls: {count:number} }).__nativeCalls.count)).toBeGreaterThan(0);
+  expect(decoderRequests).toHaveLength(0);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => (window as unknown as { __nativeStreams: MediaStream[] }).__nativeStreams.every(stream => stream.getTracks().every(track => track.readyState === 'ended')))).toBe(true);
 });

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { BrowserMultiFormatReader, type IScannerControls } from '@zxing/browser';
-import { BarcodeFormat, DecodeHintType } from '@zxing/library';
+import type { IScannerControls } from '@zxing/browser';
 import { CameraOff, Keyboard, LoaderCircle, RotateCcw, ScanLine } from 'lucide-react';
 import { isValidIsbn } from '../lib/books';
 
@@ -41,9 +40,13 @@ export function CameraScanner({ onDetected, onManual }: CameraScannerProps) {
     let detected = false;
     let stream: MediaStream | undefined;
     let controls: IScannerControls | undefined;
+    let frame = 0;
+    type Detector = { detect: (video: HTMLVideoElement) => Promise<{ rawValue: string }[]> };
+    const nativeApi = (window as unknown as { BarcodeDetector?: { new(options: { formats: string[] }): Detector; getSupportedFormats: () => Promise<string[]> } }).BarcodeDetector;
     const video = videoRef.current;
 
     const release = () => {
+      cancelAnimationFrame(frame);
       controls?.stop();
       stream?.getTracks().forEach(track => track.stop());
       if (video && video.srcObject === stream) video.srcObject = null;
@@ -70,36 +73,62 @@ export function CameraScanner({ onDetected, onManual }: CameraScannerProps) {
           audio: false,
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 960 },
+            height: { ideal: 540 },
           },
         });
 
         // Permission can resolve after a modal closes or StrictMode remounts.
         if (disposed) { release(); return; }
 
-        const hints = new Map<DecodeHintType, unknown>();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13]);
-        hints.set(DecodeHintType.TRY_HARDER, true);
-        const reader = new BrowserMultiFormatReader(hints, {
-          delayBetweenScanAttempts: 120,
-          delayBetweenScanSuccess: 500,
-        });
-
-        controls = await reader.decodeFromStream(stream, video, (result, _error, activeControls) => {
-          if (disposed || detected || !result) return;
-          const isbn = result.getText();
+        const accept = (isbn: string) => {
+          if (disposed || detected) return;
           if (!isValidIsbn(isbn)) {
-            setHint('Tento čárový kód není ISBN knihy. Hledejte kód začínající 978 nebo 979.');
+            setHint('Hledejte knižní čárový kód začínající 978 nebo 979.');
             return;
           }
           detected = true;
-          activeControls.stop();
           release();
           detectedRef.current(isbn);
-        });
+        };
+        const fallback = async () => {
+          // Download the JS decoder only if the device cannot decode EAN-13 natively.
+          const { startIsbnScanner } = await import('../lib/isbnScanner');
+          if (disposed || detected) return;
+          controls = await startIsbnScanner(stream!, video, accept);
+          if (disposed || detected) { release(); return; }
+          setPhase('scanning');
+        };
+        let nativeSupported = false;
+        try { nativeSupported = !!nativeApi && (await nativeApi.getSupportedFormats()).includes('ean_13'); } catch { /* Fall back to ZXing. */ }
         if (disposed || detected) { release(); return; }
-        setPhase('scanning');
+        if (nativeSupported && nativeApi) {
+          try {
+            const detector = new nativeApi({ formats: ['ean_13'] });
+            video.srcObject = stream;
+            await video.play();
+            if (disposed) { release(); return; }
+            setPhase('scanning');
+            let lastScan = 0;
+            const scan = async (now: number) => {
+              if (disposed || detected) return;
+              if (now - lastScan < 60 || video.readyState < 2) { frame = requestAnimationFrame(scan); return; }
+              lastScan = now;
+              try {
+                const results = await detector.detect(video);
+                if (disposed || detected) return;
+                for (const result of results) { accept(result.rawValue); if (detected) return; }
+                frame = requestAnimationFrame(scan);
+              } catch {
+                if (disposed || detected) return;
+                try { await fallback(); } catch (error) {
+                  release(); if (!disposed && !detected) { setError(cameraErrorMessage(error)); setPhase('error'); }
+                }
+              }
+            };
+            frame = requestAnimationFrame(scan);
+          } catch { if (!disposed && !detected) await fallback(); }
+        } else await fallback();
       } catch (cause) {
         release();
         if (disposed || detected) return;

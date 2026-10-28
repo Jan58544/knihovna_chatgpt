@@ -1,4 +1,4 @@
-# Folio — osobní knihovna
+# Shelfless — osobní knihovna
 
 Minimalistická česká webová aplikace pro knihy, které chcete přečíst, právě čtete nebo už máte za sebou. React, TypeScript a Vite.
 
@@ -15,7 +15,7 @@ Vývojový server naslouchá na portu 5173. Pro produkci spusťte `npm run build
 
 ## Funkce
 
-- Tlačítko **Scan** otevře fotoaparát a skenuje EAN-13 s platným knižním ISBN.
+- Tlačítko **Přidat knihu** nabídne fotoaparát nebo ruční zadání. Skenování otevře fotoaparát a skenuje EAN-13 s platným knižním ISBN.
 - Ruční zadání podporuje ISBN-10 i ISBN-13, včetně pomlček.
 - Metadata knih se získávají přímo v prohlížeči z veřejného API **Knihovny.cz**.
 - Kontroluje se přesná shoda ISBN vydání; opakované naskenování otevře již uloženou knihu.
@@ -23,11 +23,11 @@ Vývojový server naslouchá na portu 5173. Pro produkci spusťte `npm run build
 - Stav čtení, detail knihy, potvrzované odstranění a stažení JSON zálohy.
 - Responzivní rozhraní pro mobil i počítač, ovládání klávesnicí a respektování omezeného pohybu.
 
-Knihovna se ukládá do `localStorage` pod klíčem `folio.books.v1`. Data jsou vázána na konkrétní prohlížeč a adresu webu; nesynchronizují se mezi zařízeními. Vymazání dat webu knihovnu odstraní. JSON export je záloha dat, aplikace zatím nemá import. Knihy nejsou předem naplněné ukázkovými záznamy. Generované typografické obálky jsou ilustrační, nejsou obálkami z katalogu.
+Knihovna se ukládá do `localStorage` pod klíčem `folio.books.v1`. Data jsou vázána na konkrétní prohlížeč a adresu webu; nesynchronizují se mezi zařízeními. Vymazání dat webu knihovnu odstraní. JSON export je záloha dat, aplikace zatím nemá import. Knihy nejsou předem naplněné ukázkovými záznamy. Skutečné obálky se načítají podle ISBN přes Open Library Covers API (pouze obrázky, bibliografická data zůstávají výhradně z Knihovny.cz). Pokud poskytovatel obálku nemá, zobrazí se označená náhrada a v detailu lze nahrát vlastní JPG, PNG nebo WebP. Vlastní obrázek se zmenší a uloží pouze v tomto prohlížeči.
 
 ## Fotoaparát
 
-Prohlížeč vyžaduje **HTTPS** (při místním vývoji funguje také `localhost`) a souhlas uživatele. Na telefonu je třeba web otevřít přes HTTPS; nezabezpečená LAN adresa nestačí. Skener preferuje zadní kameru a po naskenování, přepnutí na ruční zadání nebo zavření dialogu kameru uvolní. Pokud kamera není k dispozici, lze zadat ISBN ručně. Video zůstává na zařízení a nikam se neodesílá. Pro čtení čárových kódů se používá ZXing.
+Prohlížeč vyžaduje **HTTPS** (při místním vývoji funguje také `localhost`) a souhlas uživatele. Na telefonu je třeba web otevřít přes HTTPS; nezabezpečená LAN adresa nestačí. Skener preferuje zadní kameru a po naskenování, přepnutí na ruční zadání nebo zavření dialogu kameru uvolní. Pokud kamera není k dispozici, lze zadat ISBN ručně. Video zůstává na zařízení a nikam se neodesílá. Na podporovaných zařízeních se používá nativní BarcodeDetector (EAN-13), jinak ZXing. Kamera se spouští po volbě skenování. Načtení katalogu stále závisí na připojení a odezvě API; okamžitý výsledek nelze zaručit.
 
 ## API Knihovny.cz
 
@@ -41,7 +41,7 @@ Parametry jsou `lookfor=<ISBN-13>`, `type=ISN`, `limit=10` a opakované `field[]
 
 **Živé API není z cloudového vývojového prostředí ověřováno.** Podle zadání zde vrací 502/504. Testy používají dodanou ukázkovou odpověď, nikdy nevolají katalog. Skutečné připojení a fyzické skenování je třeba ověřit v cílovém prohlížeči na HTTPS.
 
-Fonty jsou součástí aplikace a načítají se ze stejné adresy jako web, bez požadavků na Google Fonts. Obrázky knih ani video se do externích služeb neposílají; při vyhledávání katalog obdrží ISBN.
+Fonty jsou součástí aplikace a načítají se ze stejné adresy jako web, bez požadavků na Google Fonts. Video ani nahrané obálky se nikam neposílají. Knihovny.cz při vyhledávání a Open Library při načítání obálky obdrží ISBN.
 
 ## Kontroly
 
@@ -63,3 +63,11 @@ Push do `main` spustí kontroly a následně nasazení na GitHub Pages. Ve workf
 Produkční sestavení pro Pages používá `VITE_BASE_PATH=/knihovna_chatgpt/`, takže skripty, fonty a ikona fungují i v podadresáři. Ostatní hosting a místní vývoj standardně používají `/`.
 
 Pokud Pages nejsou v repozitáři zapnuté a automatické povolení nemá oprávnění, vlastník jednorázově zvolí **Settings → Pages → Build and deployment → Source: GitHub Actions**. Poté znovu spustí nasazení. Fotoaparát je na HTTPS adrese Pages dostupný po povolení v prohlížeči.
+
+## Shelfless na mobilu
+
+Mobilní rozhraní má spodní navigaci, přidávací dialog jako panel, safe-area okraje a zamezené vodorovné přetahování obsahu. Manifest umožňuje otevření v režimu samostatné aplikace po přidání na plochu; offline katalog ani synchronizace se neslibují. Desktop zachovává postranní panel a rozložení pro větší obrazovky.
+
+## Prodejní údaje
+
+Knihovny.cz nevrací počet prodaných výtisků ani pořadí v prodejnosti. Neexistuje zde napojený ověřený zdroj s vymezeným trhem, obdobím a konkrétním ISBN. Detail tyto položky zobrazuje jako **Údaj není dostupný**, nikoli nulu či odhad. Čtenost, hodnocení a počet vydání se nezaměňují za prodeje. Automatické skutečné statistiky vyžadují další ověřený zdroj dat.

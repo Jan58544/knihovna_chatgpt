@@ -60,4 +60,4 @@ jobs:
       - name: Odkaz na aplikaci
         env:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
-        run: echo "### [Otevřít aplikaci Folio]($PAGE_URL)" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "### [Otevřít aplikaci Shelfless]($PAGE_URL)" >> "$GITHUB_STEP_SUMMARY"

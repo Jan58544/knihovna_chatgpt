@@ -5,6 +5,7 @@ export interface Book {
   isbn: string
   title: string
   authors: string[]
+  coverData?: string
   coverUrl?: string
   year?: string
   publisher?: string
@@ -159,6 +160,7 @@ function sanitizeBook(value: unknown): Book | undefined {
   if (typeof item.coverUrl === 'string') {
     try { if (new URL(item.coverUrl).protocol === 'https:') book.coverUrl = item.coverUrl } catch { /* Ignore malformed image URLs. */ }
   }
+  if (typeof item.coverData === 'string' && item.coverData.length <= 700_000 && /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(item.coverData)) book.coverData = item.coverData
   return book
 }
 
