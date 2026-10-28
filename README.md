@@ -55,3 +55,11 @@ npm run test:e2e
 Jednotkové testy ověřují ISBN, zpracování metadat, výběr správného vydání, chyby API a ukládání dat. Prohlížečové testy používají mock katalogu a pokrývají přidání knihy, změny stavu, trvalost dat, duplicity, odstranění i mobilní rozhraní. GitHub Actions spouští kontroly při pushi a pull requestu.
 
 Aplikace neobsahuje účet, synchronizaci ani platební systém. Prémiový vzhled není napojen na skutečné předplatné.
+
+## Veřejný web — GitHub Pages
+
+Push do `main` spustí kontroly a následně nasazení na GitHub Pages. Ve workflow je prostředí `github-pages` s odkazem na aplikaci. Adresa webu je https://jan58544.github.io/knihovna_chatgpt/ .
+
+Produkční sestavení pro Pages používá `VITE_BASE_PATH=/knihovna_chatgpt/`, takže skripty, fonty a ikona fungují i v podadresáři. Ostatní hosting a místní vývoj standardně používají `/`.
+
+Pokud Pages nejsou v repozitáři zapnuté a automatické povolení nemá oprávnění, vlastník jednorázově zvolí **Settings → Pages → Build and deployment → Source: GitHub Actions**. Poté znovu spustí nasazení. Fotoaparát je na HTTPS adrese Pages dostupný po povolení v prohlížeči.
