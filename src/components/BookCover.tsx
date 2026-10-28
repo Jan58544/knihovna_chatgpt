@@ -4,8 +4,8 @@ import type { Book } from '../lib/books';
 const palette = ['sage', 'peach', 'lilac', 'blue', 'yellow'];
 export function BookCover({ book }: { book: Book }) {
   const source = book.coverData || book.coverUrl || `https://covers.openlibrary.org/b/isbn/${book.isbn}-L.jpg?default=false`;
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [source]);
+  const [failed, setFailed] = useState(!book.isbn && !book.coverData && !book.coverUrl);
+  useEffect(() => setFailed(!book.isbn && !book.coverData && !book.coverUrl), [source, book.isbn, book.coverData, book.coverUrl]);
   const color = palette[Array.from(book.isbn).reduce((sum, digit) => sum + Number(digit), 0) % palette.length];
   return <div className={`book-cover ${color} ${failed ? 'cover-unavailable' : 'has-image'}`}>
     <span className="cover-title">{book.title}</span>

@@ -5,6 +5,8 @@ export interface Book {
   isbn: string
   title: string
   authors: string[]
+  edition?: string
+  copies?: number
   coverData?: string
   coverUrl?: string
   year?: string
@@ -85,7 +87,7 @@ function bookFromRecord(record: CatalogRecord, isbn: string): Book | undefined {
   const year = stringList(record.publicationDates).join(' ').match(/(?<!\d)[12]\d{3}(?!\d)/)?.[0]
   const pageMatch = stringList(record.physicalDescriptions).join(' ').match(/\b(\d+)\s*(?:s\.|stran(?:y)?\b)/i)
   return {
-    id: `isbn-${isbn}`,
+    id: isbn ? `isbn-${isbn}` : typeof record.id === 'string' ? `catalog-${record.id}` : crypto.randomUUID(),
     isbn,
     title,
     authors,
@@ -100,12 +102,9 @@ function bookFromRecord(record: CatalogRecord, isbn: string): Book | undefined {
   }
 }
 
-export async function lookupBook(raw: string, signal?: AbortSignal): Promise<Book> {
-  const isbn = isbnTo13(raw)
-  const params = new URLSearchParams({ lookfor: isbn, type: 'ISN', limit: '10' })
-  for (const field of ['id', 'title', 'authors', 'publishers', 'placesOfPublication', 'publicationDates', 'physicalDescriptions', 'isbns', 'issns', 'cnb', 'formats']) {
-    params.append('field[]', field)
-  }
+async function requestRecords(lookfor: string, type: 'ISN' | 'Title' | 'Author', signal?: AbortSignal): Promise<CatalogRecord[]> {
+  const params = new URLSearchParams({ lookfor, type, limit: '10' })
+  for (const field of ['id', 'title', 'authors', 'publishers', 'placesOfPublication', 'publicationDates', 'physicalDescriptions', 'isbns', 'issns', 'cnb', 'formats']) params.append('field[]', field)
   const controller = new AbortController()
   let timedOut = false
   const cancel = () => controller.abort(signal?.reason)
@@ -133,29 +132,56 @@ export async function lookupBook(raw: string, signal?: AbortSignal): Promise<Boo
     if (!data || (data.status && data.status !== 'OK')) throw new Error('Katalog je nyní nedostupný. Zkuste to později.')
     const records = data.records ?? []
     if (!Array.isArray(records)) throw new Error('Katalog vrátil nečitelnou odpověď. Zkuste to později.')
-    for (const record of records) {
-      if (!record || !stringList(record.isbns).some(value => catalogIsbn(value) === isbn)) continue
-      const book = bookFromRecord(record, isbn)
-      if (book) return book
-    }
-    throw new Error('Knihu s tímto ISBN jsme v katalogu nenašli. Zkontrolujte číslo a zkuste to znovu.')
+    return records
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', cancel)
   }
 }
 
+export async function lookupBook(raw: string, signal?: AbortSignal): Promise<Book> {
+  const isbn = isbnTo13(raw)
+  for (const record of await requestRecords(isbn, 'ISN', signal)) {
+    if (!record || !stringList(record.isbns).some(value => catalogIsbn(value) === isbn)) continue
+    const book = bookFromRecord(record, isbn)
+    if (book) return book
+  }
+  throw new Error('Knihu s tímto ISBN jsme v katalogu nenašli. Zkontrolujte číslo a zkuste to znovu.')
+}
+
+export async function searchCatalog(query: string, type: 'Title' | 'Author', signal?: AbortSignal): Promise<Book[]> {
+  if (query.trim().length < 2) throw new Error('Zadejte alespoň dva znaky.')
+  const records = await requestRecords(query.trim(), type, signal)
+  return records.flatMap(record => {
+    if (!record || !stringList(record.formats).includes('0/BOOKS/')) return []
+    const isbn = stringList(record.isbns).map(catalogIsbn).find(Boolean) ?? ''
+    const book = bookFromRecord(record, isbn)
+    return book ? [book] : []
+  })
+}
+
+function normalizeIdentity(value: string) { return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim() }
+export function editionKey(book: Book): string {
+  if (book.isbn) return `isbn:${isbnTo13(book.isbn)}`
+  if (book.catalogId) return `catalog:${book.catalogId}`
+  return `manual:${[book.title, book.authors.map(normalizeIdentity).sort().join(';'), book.year ?? '', book.publisher ?? '', book.edition ?? ''].map(normalizeIdentity).join('|')}`
+}
+export function findDuplicate(books: Book[], book: Book): Book | undefined {
+  return books.find(existing => existing.id !== book.id && editionKey(existing) === editionKey(book))
+}
+
 function sanitizeBook(value: unknown): Book | undefined {
   if (!value || typeof value !== 'object') return undefined
   const item = value as Partial<Book>
-  if (typeof item.isbn !== 'string' || !isValidIsbn(item.isbn) || typeof item.title !== 'string' || !item.title.trim()) return undefined
+  if (typeof item.isbn !== 'string' || (item.isbn !== '' && !isValidIsbn(item.isbn)) || (!item.isbn && (typeof item.id !== 'string' || !item.id)) || typeof item.title !== 'string' || !item.title.trim()) return undefined
   if (!Array.isArray(item.authors) || !item.authors.every(author => typeof author === 'string')) return undefined
   if (!['want', 'reading', 'read'].includes(item.status ?? '') || typeof item.addedAt !== 'string' || Number.isNaN(Date.parse(item.addedAt))) return undefined
-  const isbn = isbnTo13(item.isbn)
+  const isbn = item.isbn ? isbnTo13(item.isbn) : ''
   const book: Book = { id: typeof item.id === 'string' && item.id ? item.id : `isbn-${isbn}`, isbn, title: item.title, authors: item.authors, status: item.status as BookStatus, addedAt: item.addedAt }
-  for (const key of ['year', 'publisher', 'description', 'publicationPlace', 'cnb', 'catalogId'] as const) {
+  for (const key of ['year', 'publisher', 'description', 'publicationPlace', 'cnb', 'catalogId', 'edition'] as const) {
     if (typeof item[key] === 'string') book[key] = item[key]
   }
+  if (typeof item.copies === 'number' && Number.isInteger(item.copies) && item.copies >= 1 && item.copies <= 999) book.copies = item.copies
   if (typeof item.pages === 'number' && Number.isInteger(item.pages) && item.pages > 0) book.pages = item.pages
   if (typeof item.coverUrl === 'string') {
     try { if (new URL(item.coverUrl).protocol === 'https:') book.coverUrl = item.coverUrl } catch { /* Ignore malformed image URLs. */ }
@@ -171,8 +197,8 @@ export function loadBooks(): Book[] {
     const seen = new Set<string>()
     return data.flatMap(value => {
       const book = sanitizeBook(value)
-      if (!book || seen.has(book.isbn)) return []
-      seen.add(book.isbn)
+      if (!book || seen.has(editionKey(book))) return []
+      seen.add(editionKey(book))
       return [book]
     })
   } catch { return [] }
@@ -183,4 +209,22 @@ export function saveBooks(books: Book[]): boolean {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(books))
     return true
   } catch { return false }
+}
+
+export function parseBackup(text: string): Book[] {
+  let data: unknown
+  try { data = JSON.parse(text) } catch { throw new Error('Soubor není platná JSON záloha.') }
+  const rows = Array.isArray(data) ? data : data && typeof data === 'object' && 'books' in data ? (data as { books: unknown }).books : null
+  if (!Array.isArray(rows) || rows.length > 10000) throw new Error('Záloha musí obsahovat seznam knih (nejvýše 10 000).')
+  const books = rows.map(sanitizeBook)
+  if (books.some(book => !book)) throw new Error('Záloha obsahuje neplatné knihy. Nic nebylo změněno.')
+  return books as Book[]
+}
+export function mergeBackup(existing: Book[], imported: Book[]): { books: Book[]; added: number; skipped: number } {
+  const books = [...existing]; let skipped = 0
+  for (const book of imported) {
+    if (books.some(item => editionKey(item) === editionKey(book))) { skipped++; continue }
+    books.push({ ...book, id: books.some(item => item.id === book.id) ? crypto.randomUUID() : book.id })
+  }
+  return { books, added: books.length - existing.length, skipped }
 }
